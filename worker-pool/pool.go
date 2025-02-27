@@ -19,9 +19,9 @@ type Task struct {
 	Action  string `json:"action"`
 	Payload string `json:"payload"`
 	Result  string `json:"result"`
+	Status  string `json:"status"`
 }
 
-// Creating a workerpool to work on the tasks in the queue.
 func NewWorkerPool(workers int, redisClient *redis.Client) *WorkerPool {
 	return &WorkerPool{
 		workers:     workers,
@@ -47,12 +47,13 @@ func (wp *WorkerPool) processTask(taskID string) {
 		return
 	}
 
+	task.Status = "Processing"
+
 	// Simulating processing time as there is no real task.
 	time.Sleep(2 * time.Second)
 
 	task.Result = "Processed: " + task.Payload
 
-	//Storing the processed result into redis.
 	resultJSON, _ := json.Marshal(task)
 	err = wp.redisClient.Set(ctx, "task:result:"+task.TaskID, resultJSON, 0).Err()
 	if err != nil {
@@ -71,6 +72,7 @@ func (wp *WorkerPool) processTask(taskID string) {
 	}
 
 	log.Printf("Task %s processed\n", task.TaskID)
+	task.Status = "Completed"
 }
 
 // Workers from workerpool start executing the tasks from the task_queue queue.

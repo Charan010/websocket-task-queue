@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	workerpool "github.com/Charan010/websocket-task-queue/worker-pool"
+	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
 )
@@ -24,9 +25,8 @@ var (
 		},
 	}
 
-	//map of whether client already exists in the clients
 	clients   = make(map[*websocket.Conn]bool)
-	clientsMu sync.Mutex // Mutex for protecting the clients map and to avoid race conditions.
+	clientsMu sync.Mutex //to avoid race conditions.
 )
 
 // Task struct represents the structure of data that client sends.
@@ -37,10 +37,64 @@ type Task struct {
 	Result  string `json:"result,omitempty"`
 }
 
-// handleConnection handles each new WebSocket connection.
+type TaskResult struct {
+	TaskID string `json:"task_id"`
+	Status string `json:"status"`
+	Result string `json:"result,omitempty"`
+}
+
+func FetchTaskResultHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := context.Background()
+
+	vars := mux.Vars(r)
+	taskID := vars["task_id"]
+
+	resultJSON, err := redisClient.Get(ctx, "task:result:"+taskID).Result()
+	if err == redis.Nil {
+
+		status, err := redisClient.Get(ctx, "task:status:"+taskID).Result()
+		if err == redis.Nil {
+			http.Error(w, `{"error": "Task not found"}`, http.StatusNotFound)
+			return
+		} else if err != nil {
+			http.Error(w, `{"error": "Internal Server Error"}`, http.StatusInternalServerError)
+			return
+		}
+
+		response := TaskResult{
+			TaskID: taskID,
+			Status: status,
+		}
+
+		json.NewEncoder(w).Encode(response)
+		return
+
+	} else if err != nil {
+		http.Error(w, `{"error": "Internal Server Error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	var task Task
+	err = json.Unmarshal([]byte(resultJSON), &task)
+	if err != nil {
+		http.Error(w, `{"error": "Error parsing task result"}`, http.StatusInternalServerError)
+		return
+	}
+
+	response := TaskResult{
+		TaskID: task.TaskID,
+		Status: "completed",
+		Result: task.Result,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+
+}
+
+// handles each websocket connection.
 func handleConnection(w http.ResponseWriter, r *http.Request) {
 
-	//upgrade the HTTP connection to a WebSocket connection.
+	//Upgrading from http to websocket connection.
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("[ERROR] WebSocket Upgrade Failed:", err)
@@ -58,30 +112,26 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 	for {
 		var task Task
 
-		// Read JSON data from the client.
 		if err := conn.ReadJSON(&task); err != nil {
 			log.Println("[ERROR] Failed to Read JSON:", err)
 			break
 		}
 
-		//To make sure that JSON data has valid taskID
+		//tasks should have valid taskID
 		if task.TaskID == "" {
 			log.Println("[ERROR] Invalid Task: Missing Task ID")
 			continue
 		}
 
-		// Convert the task into JSON.
 		taskJSON, err := json.Marshal(task)
 		if err != nil {
 			log.Println("[ERROR] Failed to Marshal Task JSON:", err)
 			continue
 		}
 
-		// Define a Redis key using the TaskID.
 		taskKey := "task:" + task.TaskID
 		log.Printf("Storing data with key %v\n", taskKey)
 
-		// Store the full task data in Redis with no expiration.
 		if err := redisClient.SetNX(ctx, taskKey, taskJSON, 0).Err(); err != nil {
 			log.Println("[ERROR] Failed to Store Task in Redis:", err)
 			continue
@@ -111,14 +161,14 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 
 // notifyClients sends the processed task result to all connected WebSocket clients.
 func notifyClients(taskID string) {
-	// Retrieve the processed task result from Redis.
+
+	//retrieves the task from redis queue.
 	taskJSON, err := redisClient.Get(ctx, "task:result:"+taskID).Result()
 	if err != nil {
 		log.Println("Error fetching task result:", err)
 		return
 	}
 
-	// Send the result to each connected client.
 	clientsMu.Lock()
 	for client := range clients {
 		err := client.WriteMessage(websocket.TextMessage, []byte(taskJSON))
@@ -144,7 +194,7 @@ func watchTaskResults() {
 
 func main() {
 
-	_, err := redisClient.Ping(ctx).Result() //Checking whether go can connect to redis or not.
+	_, err := redisClient.Ping(ctx).Result() //Redis working or not.
 	if err != nil {
 		log.Fatal("Cannot connect to Redis:", err)
 	}
@@ -156,9 +206,11 @@ func main() {
 
 	go watchTaskResults()
 
-	// Set up the WebSocket handler.
-	http.HandleFunc("/ws", handleConnection)
+	r := mux.NewRouter()
+
+	r.HandleFunc("/ws", handleConnection)
+	r.HandleFunc("/task/results/{task_id}", FetchTaskResultHandler).Methods("GET")
 
 	fmt.Println("WebSocket server started on ws://localhost:8080/ws")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Fatal(http.ListenAndServe(":8080", r))
 }
