@@ -20,7 +20,7 @@
 
 1. Clone the repository:
    ```sh
-   git clone https://github.com/yourusername/yourproject.git
+   git clone https://github.com/Charan010/websocket-task-queue.git
    cd websocket-task-queue
    ```
 
