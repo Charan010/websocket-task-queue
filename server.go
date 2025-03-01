@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 
@@ -107,7 +108,13 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 	clients[conn] = true
 	clientsMu.Unlock()
 
-	log.Println("[INFO] New WebSocket Client Connected")
+	ip, port, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		fmt.Println("Error parsing RemoteAddr:", err)
+		return
+	}
+
+	log.Printf("[INFO] New WebSocket Client %v:%v Connected\n", ip, port)
 
 	for {
 		var task Task
@@ -130,19 +137,20 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 		}
 
 		taskKey := "task:" + task.TaskID
-		log.Printf("Storing data with key %v\n", taskKey)
 
 		if err := redisClient.SetNX(ctx, taskKey, taskJSON, 0).Err(); err != nil {
 			log.Println("[ERROR] Failed to Store Task in Redis:", err)
 			continue
 		}
 
-		// Push the TaskID to the Redis queue for worker consumption.
-		if err := redisClient.RPush(ctx, "task_queue", task.TaskID).Err(); err != nil {
-			log.Println("[ERROR] Failed to Push Task ID to Redis Queue:", err)
-			continue
+		err = redisClient.RPush(ctx, "task_queue", task.TaskID).Err()
+
+		if err != nil {
+			log.Printf("[ERROR] Failed to Push Task ID %s to Redis Queue: %v \n", task.TaskID, err)
+		} else {
+			log.Printf("[INFO] Task ID %s Added to Redis Queue\n", task.TaskID)
+
 		}
-		log.Printf("[INFO] Task ID %s Added to Redis Queue\n", task.TaskID)
 
 		//Acknowledgement to the client that the task has been recieved and sent to processing.
 		response := map[string]string{"status": "received", "task_id": task.TaskID}

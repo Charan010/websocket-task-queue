@@ -14,6 +14,8 @@ type WorkerPool struct {
 	redisClient *redis.Client
 }
 
+const MAX_RETRIES = 10
+
 type Task struct {
 	TaskID  string `json:"task_id"`
 	Action  string `json:"action"`
@@ -22,6 +24,7 @@ type Task struct {
 	Status  string `json:"status"`
 }
 
+// Creating a workerpool to work on the tasks in the queue.
 func NewWorkerPool(workers int, redisClient *redis.Client) *WorkerPool {
 	return &WorkerPool{
 		workers:     workers,
@@ -30,7 +33,7 @@ func NewWorkerPool(workers int, redisClient *redis.Client) *WorkerPool {
 }
 
 // Worker Process the task and publishes the JSON result to the task_completed channel.
-func (wp *WorkerPool) processTask(taskID string) {
+func (wp *WorkerPool) processTask(taskID string, redisClient redis.Client) {
 
 	ctx := context.Background()
 
@@ -47,13 +50,35 @@ func (wp *WorkerPool) processTask(taskID string) {
 		return
 	}
 
+	Doable := true
+
+	if !Doable {
+		_, err := redisClient.XAdd(context.Background(), &redis.XAddArgs{
+			Stream: "dlq_queue",
+			Values: map[string]interface{}{
+				"task_id":      task.TaskID,
+				"task_action":  task.Action,
+				"task_payload": task.Payload,
+				"task_status":  "failed",
+			},
+		}).Result()
+
+		if err != nil {
+			log.Fatalf("[ERROR] Failed to push task %v to stream\n", task.TaskID)
+			return
+		}
+
+		log.Fatalf("Pushed task %v into stream. Will be debugged later by the admin\n", task.TaskID)
+	}
+
 	task.Status = "Processing"
 
 	// Simulating processing time as there is no real task.
-	time.Sleep(2 * time.Second)
+	time.Sleep(time.Second * 3)
 
 	task.Result = "Processed: " + task.Payload
 
+	//Storing the processed result into redis.
 	resultJSON, _ := json.Marshal(task)
 	err = wp.redisClient.Set(ctx, "task:result:"+task.TaskID, resultJSON, 0).Err()
 	if err != nil {
@@ -92,7 +117,7 @@ func (wp *WorkerPool) Start() {
 				}
 
 				log.Printf("Worker %d processing task %s\n", workerID, taskID)
-				wp.processTask(taskID)
+				wp.processTask(taskID, *wp.redisClient)
 			}
 		}(i)
 	}
