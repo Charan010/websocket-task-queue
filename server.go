@@ -24,6 +24,7 @@ var (
 		CheckOrigin: func(r *http.Request) bool {
 			return true
 		},
+		EnableCompression: true,
 	}
 
 	clients   = make(map[*websocket.Conn]bool)
