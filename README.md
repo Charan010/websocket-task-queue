@@ -21,6 +21,7 @@
 1. Clone the repository:
    ```sh
    git clone https://github.com/yourusername/yourproject.git
+   cd websocket-task-queue
    ```
 
 2. Install required packages:
@@ -33,10 +34,10 @@
 
 3. Make sure redis is installed and running on your PC:
  
- ```sh
-docker ps
-```
-(if you are using docker to install redis).
+    ```sh
+    docker ps
+    ```
+(If you are using docker to install redis).
 
 4. Running the server:
     ```sh
