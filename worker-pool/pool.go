@@ -22,6 +22,7 @@ type Task struct {
 	Payload string `json:"payload"`
 	Result  string `json:"result"`
 	Status  string `json:"status"`
+	Retries int    `json:"retries"`
 }
 
 // Creating a workerpool to work on the tasks in the queue.
@@ -50,9 +51,19 @@ func (wp *WorkerPool) processTask(taskID string, redisClient redis.Client) {
 		return
 	}
 
-	Doable := true
+	task.Status = "Processing"
 
-	if !Doable {
+	isValid := true
+
+	for task.Retries < MAX_RETRIES {
+
+		if isValid {
+			task.Retries = 0
+			break
+		}
+	}
+
+	if task.Retries >= MAX_RETRIES {
 		_, err := redisClient.XAdd(context.Background(), &redis.XAddArgs{
 			Stream: "dlq_queue",
 			Values: map[string]interface{}{
@@ -70,11 +81,6 @@ func (wp *WorkerPool) processTask(taskID string, redisClient redis.Client) {
 
 		log.Fatalf("Pushed task %v into stream. Will be debugged later by the admin\n", task.TaskID)
 	}
-
-	task.Status = "Processing"
-
-	// Simulating processing time as there is no real task.
-	time.Sleep(time.Second * 3)
 
 	task.Result = "Processed: " + task.Payload
 
